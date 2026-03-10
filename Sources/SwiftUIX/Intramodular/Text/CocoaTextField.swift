@@ -48,7 +48,8 @@ public struct CocoaTextField<Label: View>: View {
         var secureTextEntry: Bool?
         var textColor: UIColor?
         var textContentType: UITextContentType?
-        
+        var passwordRules: UITextInputPasswordRules?
+
         // MARK: Input Accessory
         
         var inputAccessoryView: AnyView?
@@ -231,6 +232,7 @@ fileprivate struct _CocoaTextField<Label: View>: UIViewRepresentable {
             uiView.textAlignment = .init(context.environment.multilineTextAlignment)
             uiView.textColor = configuration.textColor
             uiView.textContentType = configuration.textContentType
+            uiView.passwordRules = configuration.passwordRules
             uiView.tintColor = context.environment.tintColor?.toUIColor()
             
             if let kerning = configuration.kerning {
@@ -498,6 +500,10 @@ extension CocoaTextField {
     
     public func secureTextEntry(_ isSecureTextEntry: Bool) -> Self {
         then({ $0.configuration.secureTextEntry = isSecureTextEntry })
+    }
+
+    public func passwordRules(_ passwordRules: UITextInputPasswordRules?) -> Self {
+        then({ $0.configuration.passwordRules = passwordRules })
     }
     
     public func clearButtonMode(_ clearButtonMode: UITextField.ViewMode) -> Self {
