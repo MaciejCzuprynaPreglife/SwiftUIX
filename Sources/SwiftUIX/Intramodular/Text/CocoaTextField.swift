@@ -620,10 +620,16 @@ private final class PlatformTextField: UITextField {
     var isFirstResponderBinding: Binding<Bool>?
 
     var onDeleteBackward: () -> Void = { }
-    
+
     var textRect: CocoaTextField<AnyView>.Rect?
     var editingRect: CocoaTextField<AnyView>.Rect?
     var clearButtonRect: CocoaTextField<AnyView>.Rect?
+
+    /// Locked intrinsic height. Once measured, the height stays constant so that
+    /// toggling `isSecureTextEntry` (which changes vertical metrics) does not
+    /// cause a visible layout shift.
+    private var lockedIntrinsicHeight: CGFloat?
+    private var lockedFont: UIFont?
 
     lazy var clearButton: UIButton? = value(forKeyPath: "_clearButton") as? UIButton
 
@@ -677,8 +683,26 @@ private final class PlatformTextField: UITextField {
     
     override func clearButtonRect(forBounds bounds: CGRect) -> CGRect {
         let original = super.clearButtonRect(forBounds: bounds)
-        
+
         return clearButtonRect?(bounds, original) ?? original
+    }
+
+    /// Returns a stable intrinsic height regardless of `isSecureTextEntry`.
+    /// Secure dots and plain-text glyphs can have different vertical metrics,
+    /// causing a visible layout shift when toggling password visibility.
+    /// We lock the height on the first measurement and only reset it when the
+    /// font changes.
+    override var intrinsicContentSize: CGSize {
+        var size = super.intrinsicContentSize
+
+        if let lockedHeight = lockedIntrinsicHeight, lockedFont === font {
+            size.height = lockedHeight
+        } else {
+            lockedIntrinsicHeight = size.height
+            lockedFont = font
+        }
+
+        return size
     }
 }
 
