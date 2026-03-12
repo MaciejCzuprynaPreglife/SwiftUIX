@@ -148,19 +148,36 @@ fileprivate struct _CocoaTextField<Label: View>: UIViewRepresentable {
             }
             
             configuration.onCommit()
-            
+
             return true
         }
+
+        /// Captures all text changes including password autofill, which bypasses
+        /// textFieldDidChangeSelection.
+        @objc func textDidChange(_ notification: Notification) {
+            guard let textField = notification.object as? UITextField else { return }
+            let newText = textField.text ?? ""
+            guard text.wrappedValue != newText else { return }
+            text.wrappedValue = newText
+        }
     }
-    
+
     func makeUIView(context: Context) -> UIViewType {
         let uiView = PlatformTextField()
-        
+
         uiView.setContentHuggingPriority(.defaultHigh, for: .vertical)
         uiView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        
+
         uiView.delegate = context.coordinator
-        
+
+        // Observe text changes via notification to capture autofill (including
+        // "Suggest Strong Password") which bypasses delegate methods.
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.textDidChange(_:)),
+            name: UITextField.textDidChangeNotification,
+            object: uiView)
+
         if context.environment.isEnabled {
             DispatchQueue.main.async {
                 if (configuration.isInitialFirstResponder ?? configuration.isFocused?.wrappedValue) ?? false {
@@ -199,7 +216,12 @@ fileprivate struct _CocoaTextField<Label: View>: UIViewRepresentable {
             uiView.clearButtonMode = configuration.clearButtonMode ?? .never
             uiView.enablesReturnKeyAutomatically = configuration.enablesReturnKeyAutomatically ?? false
             uiView.font = try? configuration.uiFont ?? context.environment.font?.toAppKitOrUIKitFont() ?? uiView.font
-            uiView.isSecureTextEntry = configuration.secureTextEntry ?? false
+            // Only update isSecureTextEntry when it actually changes.
+            // Re-setting the same value causes iOS to clear autofilled password content.
+            let newSecureTextEntry = configuration.secureTextEntry ?? false
+            if uiView.isSecureTextEntry != newSecureTextEntry {
+                uiView.isSecureTextEntry = newSecureTextEntry
+            }
             uiView.isUserInteractionEnabled = context.environment.isEnabled
             uiView.keyboardType = configuration.keyboardType
             uiView.returnKeyType = configuration.returnKeyType ?? .default
@@ -217,7 +239,17 @@ fileprivate struct _CocoaTextField<Label: View>: UIViewRepresentable {
         }
         
         setData: do {
-            uiView.text = text.wrappedValue
+            // Don't overwrite UITextField content from autofill before the async
+            // binding update in textFieldDidChangeSelection captures it.
+            if text.wrappedValue.isEmpty,
+               let uiText = uiView.text, !uiText.isEmpty,
+               uiView.isFirstResponder {
+                DispatchQueue.main.async {
+                    text.wrappedValue = uiView.text ?? ""
+                }
+            } else {
+                uiView.text = text.wrappedValue
+            }
             
             if let placeholder = configuration.placeholder {
                 uiView.attributedPlaceholder = NSAttributedString(
@@ -269,6 +301,11 @@ fileprivate struct _CocoaTextField<Label: View>: UIViewRepresentable {
         _ uiView: UIViewType,
         coordinator: Coordinator
     ) {
+        NotificationCenter.default.removeObserver(
+            coordinator,
+            name: UITextField.textDidChangeNotification,
+            object: uiView)
+
         if let isFocused = coordinator.configuration.isFocused {
             if isFocused.wrappedValue {
                 isFocused.wrappedValue = false
