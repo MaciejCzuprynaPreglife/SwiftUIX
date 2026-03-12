@@ -108,46 +108,65 @@ fileprivate struct _CocoaTextField<Label: View>: UIViewRepresentable {
         var text: Binding<String>
         var isEditing: Binding<Bool>
         var configuration: Configuration
-        
+
+        /// The text we expect after the current edit in a secure field.
+        /// Used to detect and correct iOS silently clearing secure text
+        /// after the bullet-masking animation completes.
+        private var expectedSecureText: String?
+
         init(text: Binding<String>, isEditing: Binding<Bool>, configuration: Configuration) {
             self.text = text
             self.isEditing = isEditing
             self.configuration = configuration
         }
-        
+
         func textFieldDidBeginEditing(_ textField: UITextField) {
             isEditing.wrappedValue = true
             configuration.onEditingChanged(true)
         }
-        
+
         func textFieldDidChangeSelection(_ textField: UITextField) {
             guard textField.markedTextRange == nil, text.wrappedValue != textField.text else {
                 return
             }
-            
+
             DispatchQueue.main.async {
                 self.text.wrappedValue = textField.text ?? ""
             }
         }
-        
+
         func textFieldDidEndEditing(_ textField: UITextField, reason: UITextField.DidEndEditingReason) {
             isEditing.wrappedValue = false
             configuration.onEditingChanged(false)
         }
-        
+
         func textField(
             _ textField: UITextField,
             shouldChangeCharactersIn range: NSRange,
             replacementString string: String
         ) -> Bool {
-            configuration.onCharactersChange(.init(currentText: textField.text ?? "", range: range, replacement: string))
+            let shouldChange = configuration.onCharactersChange(
+                .init(currentText: textField.text ?? "", range: range, replacement: string))
+
+            // Before the change is applied, compute the expected result for secure
+            // fields. iOS may silently clear a secure text field after the bullet-
+            // masking animation completes; we use this expected value to detect and
+            // undo that clearing in textDidChange.
+            if shouldChange, textField.isSecureTextEntry, !(textField.text ?? "").isEmpty {
+                let current = (textField.text ?? "") as NSString
+                expectedSecureText = current.replacingCharacters(in: range, with: string)
+            } else {
+                expectedSecureText = nil
+            }
+
+            return shouldChange
         }
-        
+
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {
             if configuration.dismissKeyboardOnReturn {
                 textField.resignFirstResponder()
             }
-            
+
             configuration.onCommit()
 
             return true
@@ -158,6 +177,33 @@ fileprivate struct _CocoaTextField<Label: View>: UIViewRepresentable {
         @objc func textDidChange(_ notification: Notification) {
             guard let textField = notification.object as? UITextField else { return }
             let newText = textField.text ?? ""
+
+            // Detect iOS clearing a secure text field after the bullet-masking
+            // animation. iOS fires two rapid textDidChange events:
+            //   1. text becomes "" (the clear)
+            //   2. text becomes "<newChar>" (only the just-typed character)
+            // We intercept event #1 by suppressing the binding update, then
+            // intercept event #2 by restoring the full expected text.
+            if let expected = expectedSecureText, textField.isSecureTextEntry {
+                if newText == expected {
+                    // Normal case – the text changed exactly as expected.
+                    expectedSecureText = nil
+                } else if newText.isEmpty {
+                    // Event #1: iOS cleared the text. Don't update the binding;
+                    // keep expectedSecureText so we can restore on event #2.
+                    return
+                } else if newText.count < expected.count {
+                    // Event #2: iOS inserted only the new character after clearing.
+                    // Restore the full expected text.
+                    expectedSecureText = nil
+                    textField.text = expected
+                    text.wrappedValue = expected
+                    return
+                } else {
+                    expectedSecureText = nil
+                }
+            }
+
             guard text.wrappedValue != newText else { return }
             text.wrappedValue = newText
         }
